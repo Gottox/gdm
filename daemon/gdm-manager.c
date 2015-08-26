@@ -34,7 +34,9 @@
 #include <glib/gstdio.h>
 #include <glib-object.h>
 
+#ifdef WITH_SYSTEMD
 #include <systemd/sd-login.h>
+#endif
 
 #include "gdm-common.h"
 
@@ -202,9 +204,10 @@ plymouth_quit_without_transition (void)
 }
 #endif
 
+#ifdef WITH_SYSTEMD
 static char *
-get_session_id_for_pid (pid_t    pid,
-                        GError **error)
+get_session_id_for_pid_systemd (pid_t    pid,
+                                GError **error)
 {
         char *session, *gsession;
         int ret;
@@ -229,11 +232,27 @@ get_session_id_for_pid (pid_t    pid,
                 return NULL;
         }
 }
+#endif
 
+static char *
+get_session_id_for_pid (GDBusConnection  *connection,
+                        pid_t             pid,
+                        GError          **error)
+{
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING()) {
+                return get_session_id_for_pid_systemd (pid, error);
+        }
+#endif
+
+        return NULL;
+}
+
+#ifdef WITH_SYSTEMD
 static gboolean
-get_uid_for_session_id (const char  *session_id,
-                        uid_t       *uid,
-                        GError     **error)
+get_uid_for_systemd_session_id (const char  *session_id,
+                                uid_t       *uid,
+                                GError     **error)
 {
         int ret;
 
@@ -250,6 +269,22 @@ get_uid_for_session_id (const char  *session_id,
 
         return TRUE;
 }
+#endif
+
+static gboolean
+get_uid_for_session_id (GDBusConnection  *connection,
+                        const char       *session_id,
+                        uid_t            *uid,
+                        GError          **error)
+{
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING()) {
+                return get_uid_for_systemd_session_id (session_id, uid, error);
+        }
+#endif
+
+        return FALSE;
+}
 
 static gboolean
 lookup_by_session_id (const char *id,
@@ -263,10 +298,11 @@ lookup_by_session_id (const char *id,
         return g_strcmp0 (current, looking_for) == 0;
 }
 
+#ifdef WITH_SYSTEMD
 static gboolean
-is_login_session (GdmManager  *self,
-                  const char  *session_id,
-                  GError     **error)
+is_systemd_login_session (GdmManager  *self,
+                          const char  *session_id,
+                          GError     **error)
 {
         char *session_class = NULL;
         int ret;
@@ -291,11 +327,28 @@ is_login_session (GdmManager  *self,
         g_free (session_class);
         return TRUE;
 }
+#endif
 
 static gboolean
-activate_session_id (GdmManager *manager,
-                     const char *seat_id,
-                     const char *session_id)
+is_login_session (GdmManager       *self,
+                  GDBusConnection  *connection,
+                  const char       *session_id,
+                  GError          **error)
+{
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING()) {
+                return is_systemd_login_session (self, session_id, error);
+        }
+#endif
+
+        return FALSE;
+}
+
+#ifdef WITH_SYSTEMD
+static gboolean
+activate_session_id_for_systemd (GdmManager   *manager,
+                                 const char *seat_id,
+                                 const char *session_id)
 {
         GError *error = NULL;
         GVariant *reply;
@@ -322,15 +375,30 @@ activate_session_id (GdmManager *manager,
 
         return TRUE;
 }
+#endif
 
 static gboolean
-session_unlock (GdmManager *manager,
-                const char *ssid)
+activate_session_id (GdmManager *manager,
+                     const char *seat_id,
+                     const char *session_id)
+{
+
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING()) {
+                return activate_session_id_for_systemd (manager, seat_id, session_id);
+        }
+#endif
+
+        return FALSE;
+}
+
+#ifdef WITH_SYSTEMD
+static gboolean
+session_unlock_for_systemd (GdmManager *manager,
+                            const char *ssid)
 {
         GError *error = NULL;
         GVariant *reply;
-
-        g_debug ("Unlocking session %s", ssid);
 
         reply = g_dbus_connection_call_sync (manager->priv->connection,
                                              "org.freedesktop.login1",
@@ -351,6 +419,23 @@ session_unlock (GdmManager *manager,
         }
 
         g_variant_unref (reply);
+
+        return TRUE;
+}
+#endif
+
+static gboolean
+session_unlock (GdmManager *manager,
+                const char *ssid)
+{
+
+        g_debug ("Unlocking session %s", ssid);
+
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING()) {
+                return session_unlock_for_systemd (manager, ssid);
+        }
+#endif
 
         return TRUE;
 }
@@ -385,10 +470,11 @@ find_session_for_user_on_seat (GdmManager *manager,
         return NULL;
 }
 
+#ifdef WITH_SYSTEMD
 static gboolean
-is_remote_session (GdmManager  *self,
-                   const char  *session_id,
-                   GError     **error)
+is_systemd_remote_session (GdmManager  *self,
+                           const char  *session_id,
+                           GError     **error)
 {
         char *seat;
         int ret;
@@ -414,10 +500,27 @@ is_remote_session (GdmManager  *self,
 
         return is_remote;
 }
+#endif
 
+static gboolean
+is_remote_session (GdmManager       *self,
+                  GDBusConnection  *connection,
+                  const char       *session_id,
+                  GError          **error)
+{
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING()) {
+                return is_systemd_remote_session (self, session_id, error);
+        }
+#endif
+
+        return FALSE;
+}
+
+#ifdef WITH_SYSTEMD
 static char *
-get_seat_id_for_session_id (const char  *session_id,
-                            GError     **error)
+get_seat_id_for_systemd_session_id (const char  *session_id,
+                                    GError     **error)
 {
         int ret;
         char *seat, *out_seat;
@@ -442,10 +545,26 @@ get_seat_id_for_session_id (const char  *session_id,
 
         return out_seat;
 }
+#endif
 
 static char *
-get_tty_for_session_id (const char  *session_id,
-                        GError     **error)
+get_seat_id_for_session_id (GDBusConnection  *connection,
+                            const char       *session_id,
+                            GError          **error)
+{
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING()) {
+                return get_seat_id_for_systemd_session_id (session_id, error);
+        }
+#endif
+
+        return NULL;
+}
+
+#ifdef WITH_SYSTEMD
+static char *
+get_tty_for_systemd_session_id (const char  *session_id,
+                                GError     **error)
 {
         int ret;
         char *tty, *out_tty;
@@ -468,6 +587,20 @@ get_tty_for_session_id (const char  *session_id,
         }
 
         return out_tty;
+}
+#endif
+
+static char *
+get_tty_for_session_id (const char  *session_id,
+                        GError     **error)
+{
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING()) {
+                return get_tty_for_systemd_session_id (session_id, error);
+        }
+#endif
+
+        return NULL;
 }
 
 static void
@@ -512,7 +645,7 @@ get_display_and_details_for_bus_sender (GdmManager       *self,
                 goto out;
         }
 
-        session_id = get_session_id_for_pid (pid, &error);
+        session_id = get_session_id_for_pid (connection, pid, &error);
 
         if (session_id == NULL) {
                 g_debug ("GdmManager: Error while retrieving session id for sender: %s",
@@ -526,7 +659,7 @@ get_display_and_details_for_bus_sender (GdmManager       *self,
         }
 
         if (out_is_login_screen != NULL) {
-                *out_is_login_screen = is_login_session (self, session_id, &error);
+                *out_is_login_screen = is_login_session (self, connection, session_id, &error);
 
                 if (error != NULL) {
                         g_debug ("GdmManager: Error while checking if sender is login screen: %s",
@@ -536,7 +669,7 @@ get_display_and_details_for_bus_sender (GdmManager       *self,
                 }
         }
 
-        if (!get_uid_for_session_id (session_id, &session_uid, &error)) {
+        if (!get_uid_for_session_id (connection, session_id, &session_uid, &error)) {
                 g_debug ("GdmManager: Error while retrieving uid for session: %s",
                          error->message);
                 g_error_free (error);
@@ -553,7 +686,7 @@ get_display_and_details_for_bus_sender (GdmManager       *self,
         }
 
         if (out_seat_id != NULL) {
-                *out_seat_id = get_seat_id_for_session_id (session_id, &error);
+                *out_seat_id = get_seat_id_for_session_id (connection, session_id, &error);
 
                 if (error != NULL) {
                         g_debug ("GdmManager: Error while retrieving seat id for session: %s",
@@ -563,7 +696,7 @@ get_display_and_details_for_bus_sender (GdmManager       *self,
         }
 
         if (out_is_remote != NULL) {
-                *out_is_remote = is_remote_session (self, session_id, &error);
+                *out_is_remote = is_remote_session (self, connection, session_id, &error);
 
                 if (error != NULL) {
                         g_debug ("GdmManager: Error while retrieving remoteness for session: %s",
@@ -927,7 +1060,8 @@ on_reauthentication_client_rejected (GdmSession              *session,
                  * same audit session, ignore it since it doesn't "own" the
                  * reauthentication session
                  */
-                client_session_id = get_session_id_for_pid (pid_of_client,
+                client_session_id = get_session_id_for_pid (self->priv->connection,
+                                                            pid_of_client,
                                                             NULL);
                 session_id = g_object_get_data (G_OBJECT (session), "caller-session-id");
 
@@ -1139,16 +1273,20 @@ static gboolean
 display_is_on_seat0 (GdmDisplay *display)
 {
         gboolean is_on_seat0 = TRUE;
-        char *seat_id = NULL;
 
-        g_object_get (G_OBJECT (display), "seat-id", &seat_id, NULL);
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING()) {
+                char *seat_id = NULL;
 
-        if (g_strcmp0 (seat_id, "seat0") != 0) {
-            is_on_seat0 = FALSE;
+                g_object_get (G_OBJECT (display), "seat-id", &seat_id, NULL);
+
+                if (g_strcmp0 (seat_id, "seat0") != 0) {
+                        is_on_seat0 = FALSE;
+                }
+
+                g_free (seat_id);
         }
-
-        g_free (seat_id);
-
+#endif
         return is_on_seat0;
 }
 
@@ -1752,8 +1890,12 @@ static char *
 get_display_device (GdmManager *manager,
                     GdmDisplay *display)
 {
-        /* systemd finds the display device out on its own based on the display */
-        return NULL;
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING()) {
+                /* systemd finds the display device out on its own based on the display */
+                return NULL;
+        }
+#endif
 }
 
 static void

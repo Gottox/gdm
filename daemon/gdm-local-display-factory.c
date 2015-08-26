@@ -59,8 +59,10 @@ struct GdmLocalDisplayFactoryPrivate
         /* FIXME: this needs to be per seat? */
         guint            num_failures;
 
+#ifdef WITH_SYSTEMD
         guint            seat_new_id;
         guint            seat_removed_id;
+#endif
 };
 
 enum {
@@ -190,8 +192,16 @@ store_display (GdmLocalDisplayFactory *factory,
 static const char *
 get_seat_of_transient_display (GdmLocalDisplayFactory *factory)
 {
+        const char *seat_id = NULL;
+
         /* FIXME: don't hardcode seat */
-        return SYSTEMD_SEAT0_PATH;
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING() > 0) {
+                seat_id = SYSTEMD_SEAT0_PATH;
+        }
+#endif
+
+        return seat_id;
 }
 
 /*
@@ -216,7 +226,19 @@ gdm_local_display_factory_create_transient_display (GdmLocalDisplayFactory *fact
 
         g_debug ("GdmLocalDisplayFactory: Creating transient display");
 
-        display = gdm_local_display_new ();
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING() > 0) {
+                display = gdm_local_display_new ();
+        }
+#endif
+
+        if (display == NULL) {
+                guint32 num;
+
+                num = take_next_display_number (factory);
+
+                display = gdm_legacy_display_new (num);
+        }
 
         seat_id = get_seat_of_transient_display (factory);
         g_object_set (display,
@@ -372,12 +394,14 @@ create_display (GdmLocalDisplayFactory *factory,
         g_debug ("GdmLocalDisplayFactory: Adding display on seat %s", seat_id);
 
 
+#ifdef WITH_SYSTEMD
         if (g_strcmp0 (seat_id, "seat0") == 0) {
                 display = gdm_local_display_new ();
                 if (session_type != NULL) {
                         g_object_set (G_OBJECT (display), "session-type", session_type, NULL);
                 }
         }
+#endif
 
         if (display == NULL) {
                 guint32 num;
@@ -401,6 +425,8 @@ create_display (GdmLocalDisplayFactory *factory,
 
         return display;
 }
+
+#ifdef WITH_SYSTEMD
 
 static void
 delete_display (GdmLocalDisplayFactory *factory,
@@ -539,38 +565,7 @@ gdm_local_display_factory_stop_monitor (GdmLocalDisplayFactory *factory)
         }
 }
 
-static void
-on_display_added (GdmDisplayStore        *display_store,
-                  const char             *id,
-                  GdmLocalDisplayFactory *factory)
-{
-        GdmDisplay *display;
-
-        display = gdm_display_store_lookup (display_store, id);
-
-        if (display != NULL) {
-                g_signal_connect (display, "notify::status",
-                                  G_CALLBACK (on_display_status_changed), factory);
-
-                g_object_weak_ref (G_OBJECT (display), (GWeakNotify)on_display_disposed, factory);
-        }
-}
-
-static void
-on_display_removed (GdmDisplayStore        *display_store,
-                    const char             *id,
-                    GdmLocalDisplayFactory *factory)
-{
-        GdmDisplay *display;
-
-        display = gdm_display_store_lookup (display_store, id);
-
-        if (display != NULL) {
-                g_signal_handlers_disconnect_by_func (display, G_CALLBACK (on_display_status_changed), factory);
-                g_object_weak_unref (G_OBJECT (display), (GWeakNotify)on_display_disposed, factory);
-
-        }
-}
+#endif
 
 static gboolean
 gdm_local_display_factory_start (GdmDisplayFactory *base_factory)
@@ -580,20 +575,14 @@ gdm_local_display_factory_start (GdmDisplayFactory *base_factory)
 
         g_return_val_if_fail (GDM_IS_LOCAL_DISPLAY_FACTORY (factory), FALSE);
 
-        store = gdm_display_factory_get_display_store (GDM_DISPLAY_FACTORY (factory));
+#ifdef WITH_SYSTEMD
+        if (LOGIND_RUNNING()) {
+                gdm_local_display_factory_start_monitor (factory);
+                return gdm_local_display_factory_sync_seats (factory);
+        }
+#endif
 
-        g_signal_connect (G_OBJECT (store),
-                          "display-added",
-                          G_CALLBACK (on_display_added),
-                          factory);
-
-        g_signal_connect (G_OBJECT (store),
-                          "display-removed",
-                          G_CALLBACK (on_display_removed),
-                          factory);
-
-        gdm_local_display_factory_start_monitor (factory);
-        return gdm_local_display_factory_sync_seats (factory);
+        return FALSE;
 }
 
 static gboolean
@@ -604,7 +593,9 @@ gdm_local_display_factory_stop (GdmDisplayFactory *base_factory)
 
         g_return_val_if_fail (GDM_IS_LOCAL_DISPLAY_FACTORY (factory), FALSE);
 
+#ifdef WITH_SYSTEMD
         gdm_local_display_factory_stop_monitor (factory);
+#endif
 
         store = gdm_display_factory_get_display_store (GDM_DISPLAY_FACTORY (factory));
 
@@ -760,7 +751,9 @@ gdm_local_display_factory_finalize (GObject *object)
 
         g_hash_table_destroy (factory->priv->used_display_numbers);
 
+#ifdef WITH_SYSTEMD
         gdm_local_display_factory_stop_monitor (factory);
+#endif
 
         G_OBJECT_CLASS (gdm_local_display_factory_parent_class)->finalize (object);
 }

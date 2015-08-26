@@ -28,9 +28,11 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#ifdef WITH_SYSTEMD
 #include <sys/ioctl.h>
 #include <sys/vt.h>
 #include <sys/kd.h>
+#endif
 #include <errno.h>
 #include <grp.h>
 #include <pwd.h>
@@ -49,7 +51,9 @@
 
 #include <X11/Xauth.h>
 
+#ifdef WITH_SYSTEMD
 #include <systemd/sd-daemon.h>
+#endif
 
 #ifdef ENABLE_SYSTEMD_JOURNAL
 #include <systemd/sd-journal.h>
@@ -145,6 +149,7 @@ struct GdmSessionWorkerPrivate
         char             *hostname;
         char             *username;
         char             *log_file;
+        char             *session_type;
         char             *session_id;
         uid_t             uid;
         gid_t             gid;
@@ -754,6 +759,7 @@ gdm_session_worker_stop_auditor (GdmSessionWorker *worker)
         worker->priv->auditor = NULL;
 }
 
+#ifdef WITH_SYSTEMD
 static void
 on_release_display (int signal)
 {
@@ -879,6 +885,7 @@ jump_to_vt (GdmSessionWorker  *worker,
 
         close (active_vt_tty_fd);
 }
+#endif
 
 static void
 gdm_session_worker_uninitialize_pam (GdmSessionWorker *worker,
@@ -909,9 +916,11 @@ gdm_session_worker_uninitialize_pam (GdmSessionWorker *worker,
 
         gdm_session_worker_stop_auditor (worker);
 
+#ifdef WITH_SYSTEMD
         if (worker->priv->login_vt != worker->priv->session_vt) {
                 jump_to_vt (worker, worker->priv->login_vt);
         }
+#endif
 
         worker->priv->login_vt = 0;
         worker->priv->session_vt = 0;
@@ -1036,10 +1045,12 @@ gdm_session_worker_initialize_pam (GdmSessionWorker *worker,
                 }
         }
 
+#ifdef WITH_SYSTEMD
         /* set seat ID */
-        if (seat_id != NULL && seat_id[0] != '\0') {
+        if (seat_id != NULL && seat_id[0] != '\0' && LOGIND_RUNNING()) {
                 gdm_session_worker_set_environment_variable (worker, "XDG_SEAT", seat_id);
         }
+#endif
 
         if (strcmp (service, "gdm-launch-environment") == 0) {
                 gdm_session_worker_set_environment_variable (worker, "XDG_SESSION_CLASS", "greeter");
@@ -1813,12 +1824,14 @@ gdm_session_worker_start_session (GdmSessionWorker  *worker,
 
         error_code = PAM_SUCCESS;
 
+#ifdef WITH_SYSTEMD
         /* If we're in new vt mode, jump to the new vt now. There's no need to jump for
          * the other two modes: in the logind case, the session will activate itself when
          * ready, and in the reuse server case, we're already on the correct VT. */
         if (worker->priv->display_mode == GDM_SESSION_DISPLAY_MODE_NEW_VT) {
                 jump_to_vt (worker, worker->priv->session_vt);
         }
+#endif
 
         session_pid = fork ();
 
@@ -1865,6 +1878,7 @@ gdm_session_worker_start_session (GdmSessionWorker  *worker,
                         _exit (2);
                 }
 
+#ifdef WITH_SYSTEMD
                 /* Take control of the tty
                  */
                 if (needs_controlling_terminal) {
@@ -1872,6 +1886,7 @@ gdm_session_worker_start_session (GdmSessionWorker  *worker,
                                 g_debug ("GdmSessionWorker: could not take control of tty: %m");
                         }
                 }
+#endif
 
 #ifdef HAVE_LOGINCAP
                 if (setusercontext (NULL, passwd_entry, passwd_entry->pw_uid, LOGIN_SETALL) < 0) {
@@ -2016,6 +2031,7 @@ gdm_session_worker_start_session (GdmSessionWorker  *worker,
         return TRUE;
 }
 
+#ifdef WITH_SYSTEMD
 static gboolean
 set_up_for_new_vt (GdmSessionWorker *worker)
 {
@@ -2073,6 +2089,7 @@ fail:
         close (fd);
         return FALSE;
 }
+#endif
 
 static gboolean
 set_up_for_current_vt (GdmSessionWorker  *worker,
@@ -2161,6 +2178,7 @@ gdm_session_worker_open_session (GdmSessionWorker  *worker,
                         return FALSE;
                 }
                 break;
+#ifdef WITH_SYSTEMD
         case GDM_SESSION_DISPLAY_MODE_NEW_VT:
         case GDM_SESSION_DISPLAY_MODE_LOGIND_MANAGED:
                 if (!set_up_for_new_vt (worker)) {
@@ -2171,6 +2189,7 @@ gdm_session_worker_open_session (GdmSessionWorker  *worker,
                         return FALSE;
                 }
                 break;
+#endif
         }
 
         flags = 0;
@@ -2200,7 +2219,9 @@ gdm_session_worker_open_session (GdmSessionWorker  *worker,
         g_debug ("GdmSessionWorker: state SESSION_OPENED");
         worker->priv->state = GDM_SESSION_WORKER_STATE_SESSION_OPENED;
 
+#ifdef WITH_SYSTEMD
         session_id = gdm_session_worker_get_environment_variable (worker, "XDG_SESSION_ID");
+#endif
 
         /* FIXME: should we do something here?
          * Note that error return status from PreSession script should
